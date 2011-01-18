@@ -23,8 +23,12 @@ class SimpleIPC
   # Sends something to the server
   # @param [Object] something an object
   def send(something)
-    # payload e' la rappresentazione in stringa di quello che vogliamo trasferire
-    payload = YAML.dump(something)
+    # payload e' la rappresentazione serializzata di quello che vogliamo trasferire
+    if block_given? then
+      payload = yield(something)
+    else
+      payload = YAML.dump(something)
+    end
     length = [payload.size].pack(LENGTH_CODE)
     
     @socket.connect(@cfg[:host],@cfg[:port])
@@ -40,7 +44,6 @@ class SimpleIPC
   
   def get
     result = nil
-    
     begin
       if @cfg[:timeout] > 0 then
         Timeout::timeout(@cfg[:timeout]) do |to|
@@ -52,8 +55,16 @@ class SimpleIPC
     rescue Timeout::Error
       result = nil
     end
+
+    if block_given? then
+      return yield(result)
+    else
+      return YAML.load(result)
+    end
+  end
+  
+  def test_method
     
-    return result
   end
   
   def close
@@ -66,7 +77,7 @@ class SimpleIPC
     msg = @socket.recvfrom(LENGTH_SIZE)[0]
     length = msg.unpack(LENGTH_CODE)[0]
     msg, sender = @socket.recvfrom(length)
-    return YAML.load(msg) 
+    return msg 
   end
   
 end
@@ -79,9 +90,13 @@ if $0 == __FILE__ then
     from_client = SimpleIPC.new :port => 5000, :timeout => 10
     from_client.listen
     p from_client.get
+    p from_client.get {|s| s.split(",").map {|v| v.to_f} }
+    p from_client.get {|s| s.unpack("N4") }
   else 
     to_server = SimpleIPC.new :port => 5000
     to_server.send([1,2,3,"test"])
+    to_server.send([1,2,3,4]) {|o| o * ","}
+    to_server.send([1,2,3,4]) {|o| o.pack("N4")}
     to_server.close
   end
   
