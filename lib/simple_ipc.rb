@@ -45,7 +45,7 @@ class SimpleIPC
   def get
     result = nil
     begin
-      if @cfg[:timeout] > 0 then
+      if @cfg[:timeout] > 0 and !@cfg[:nonblock] then
         Timeout::timeout(@cfg[:timeout]) do |to|
           result = get_
         end
@@ -54,6 +54,8 @@ class SimpleIPC
       end
     rescue Timeout::Error
       result = nil
+    rescue Errno::EAGAIN # Riscatto l'errore nel caso NON mi arrivi un blocco
+      return nil
     end
 
     if block_given? then
@@ -74,7 +76,11 @@ class SimpleIPC
   # E' la versione semplice e la rendo privata, perche' mi serve un metodo un po' piu' complicata
   private
   def get_
-    msg = @socket.recvfrom(LENGTH_SIZE)[0]
+    if @cfg[:nonblock] then
+      msg, sender = @socket.recv_nonblock(LENGTH_SIZE)
+    else
+      msg = @socket.recvfrom(LENGTH_SIZE)[0]
+    end
     length = msg.unpack(LENGTH_CODE)[0]
     msg, sender = @socket.recvfrom(length)
     return msg 
@@ -87,16 +93,26 @@ end
 if $0 == __FILE__ then
   
   if ARGV[0] == "server" then
-    from_client = SimpleIPC.new :port => 5000, :timeout => 10
+    from_client = SimpleIPC.new :port => 5000, :timeout => 10, :nonblock => true
     from_client.listen
-    p from_client.get
-    p from_client.get {|s| s.split(",").map {|v| v.to_f} }
-    p from_client.get {|s| s.unpack("N4") }
+    running = true
+    while running != "stop" do
+      running = from_client.get
+      p running if running
+      sleep 0.01
+    end
+    # p from_client.get
+    # p from_client.get {|s| s.split(",").map {|v| v.to_f} }
+    # p from_client.get {|s| s.unpack("N4") }
   else 
     to_server = SimpleIPC.new :port => 5000
     to_server.send([1,2,3,"test"])
-    to_server.send([1,2,3,4]) {|o| o * ","}
-    to_server.send([1,2,3,4]) {|o| o.pack("N4")}
+    to_server.send({:a => "test", :b => "prova"})
+    to_server.send("stop")
+    
+
+    # to_server.send([1,2,3,4]) {|o| o * ","}
+    # to_server.send([1,2,3,4]) {|o| o.pack("N4")}
     to_server.close
   end
   
