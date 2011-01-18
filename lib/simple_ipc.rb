@@ -3,9 +3,81 @@
 require "yaml"
 require "socket"
 require "timeout"
+require "fileutils"
 
 # SimpeIPC implements a simple process communication.
 # @author Fabrizio Zendri
+class SimpleSocket
+  LOCALHOST = "127.0.0.1"
+  def initialize(args = {})
+    @cfg = {
+      :port => 5000,
+      :host => LOCALHOST,
+      :kind => :unix,
+      :force => true 
+    }
+    @cfg.merge! args
+    case @cfg[:kind]
+    when :unix
+      @socket_file = "/tmp/#{$0}.sok"
+      @socket = nil
+    when :udp
+      @socket = UDPSocket.new
+    else
+      raise ArgumentError, "Either :unix or :udp allowed"
+    end
+    @open = false
+  end
+  
+  def connect
+    return false if @open
+    case @cfg[:kind]
+    when :unix
+      @socket = UNIXSocket.open(@socket_file)
+    when :udp
+      @socket.connect(@cfg[:host],@cfg[:port])
+    end
+    @open = true
+  end
+  
+  def print(string)
+    @socket.print(string)
+  end
+  
+  def listen
+    case @cfg[:kind]
+    when :unix
+      @socket = UNIXServer.open(@socket_file).accept
+    when :udp
+      @socket.bind(LOCALHOST, @cfg[:port])
+    end
+  rescue Errno::EADDRINUSE # Cattura gli errori del tipo specificato "socket gia' in uso"
+    if @cfg[:force] then
+      FileUtils::rm(@socket_file)
+      retry # Riprova ad eseguire il metodo
+    else
+      warn $! # "$!" contiene la descrizione dell'ultimo errore
+    end
+  end
+  
+  def recvfrom(bytes)
+    @socket.recvfrom(bytes)
+  end
+  
+  def recv_nonblock(bytes)
+    @socket.recv_nonblock(bytes)
+  end
+  
+  def close
+    @socket.close
+    @open = false
+    FileUtils::rm(@socket_file) if @socket_file
+  end
+  
+end # SimpleSocket
+
+# =====================================================================================
+
 class SimpleIPC
   attr_accessor :cfg
   
@@ -17,7 +89,7 @@ class SimpleIPC
     raise ArgumentError, "expecting an Hash" unless args.kind_of? Hash
     @cfg = {:port => 5000, :host => LOCALHOST, :timeout => 0}
     @cfg.merge! args
-    @socket = UDPSocket.new()
+    @socket = SimpleSocket.new @cfg
   end
   
   # Sends something to the server
@@ -31,7 +103,7 @@ class SimpleIPC
     end
     length = [payload.size].pack(LENGTH_CODE)
     
-    @socket.connect(@cfg[:host],@cfg[:port])
+    @socket.connect
     @socket.print length
     @socket.print payload
     
@@ -39,7 +111,7 @@ class SimpleIPC
   end
   
   def listen
-    @socket.bind(LOCALHOST, @cfg[:port])
+    @socket.listen
   end
   
   def get
@@ -65,10 +137,6 @@ class SimpleIPC
     end
   end
   
-  def test_method
-    
-  end
-  
   def close
     @socket.close
   end
@@ -89,11 +157,12 @@ class SimpleIPC
 end
 
 # =====================================================================================
+# =====================================================================================
 
 if $0 == __FILE__ then
   
   if ARGV[0] == "server" then
-    from_client = SimpleIPC.new :port => 5000, :timeout => 10, :nonblock => true
+    from_client = SimpleIPC.new :timeout => 10, :nonblock => true, :kind => :unix
     from_client.listen
     running = true
     while running != "stop" do
@@ -105,7 +174,7 @@ if $0 == __FILE__ then
     # p from_client.get {|s| s.split(",").map {|v| v.to_f} }
     # p from_client.get {|s| s.unpack("N4") }
   else 
-    to_server = SimpleIPC.new :port => 5000
+    to_server = SimpleIPC.new :kind => :unix
     to_server.send([1,2,3,"test"])
     to_server.send({:a => "test", :b => "prova"})
     to_server.send("stop")
